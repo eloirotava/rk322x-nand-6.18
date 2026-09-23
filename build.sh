@@ -116,7 +116,12 @@ if grep -q '^CONFIG_MODVERSIONS=y' .config; then
 fi
 
 echo "== rknand.ko =="
-make -C "$KSRC" M="$ROOT/rknand-port" ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- modules
+# modules_prepare does not ship the distro Module.symvers. MODVERSIONS is off
+# on this image, so the names still resolve at insmod; modpost would otherwise
+# abort on every kernel symbol.
+make -C "$KSRC" M="$ROOT/rknand-port" ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- \
+	KBUILD_MODPOST_WARN=1 modules
+[ -f "$ROOT/rknand-port/rknand.ko" ]
 modinfo "$ROOT/rknand-port/rknand.ko"
 VM=$(modinfo -F vermagic "$ROOT/rknand-port/rknand.ko" | awk '{print $1}')
 [ "$VM" = "$KVER" ] || { echo "ko vermagic $VM != $KVER"; exit 1; }
