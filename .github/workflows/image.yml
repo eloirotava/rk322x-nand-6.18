@@ -1,0 +1,47 @@
+name: rk322x 6.18 rknand image
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Free disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache || true
+          df -h
+
+      - name: Build image
+        run: sudo bash build.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rk322x-trixie-6.18-rknand
+          path: |
+            out/*.img.xz
+            out/SHA256SUMS
+            out/notes.txt
+          if-no-files-found: error
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag=$(cat out/tag.txt)
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" out/*.img.xz out/SHA256SUMS --clobber
+          else
+            gh release create "$tag" out/*.img.xz out/SHA256SUMS \
+              --title "RK322x Trixie ${tag}" \
+              --notes-file out/notes.txt
+          fi
+          gh release view "$tag" --json url,assets --jq '{url:.url,assets:[.assets[].name]}'
