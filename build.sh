@@ -68,8 +68,11 @@ case "$BASEVER" in
 	*) echo "refusing non-6.18 kernel $KVER"; exit 1 ;;
 esac
 
-CFG=$(ls "$MNT/boot/config-$KVER" "$MNT/boot/config" 2>/dev/null | head -1)
-[ -n "$CFG" ] || { echo "no kernel config in /boot"; exit 1; }
+CFG="$MNT/boot/config-$KVER"
+if [ ! -f "$CFG" ]; then
+	CFG="$MNT/boot/config"
+fi
+[ -f "$CFG" ] || { echo "no kernel config in /boot"; find "$MNT/boot" -maxdepth 1 -type f -printf '%f\n'; exit 1; }
 cp "$CFG" "$WORKDIR/kernel.config"
 
 DTB=$(find "$MNT/boot" -name rk322x-box.dtb -printf '%s %p\n' | sort -n | awk '{print $2}' | tail -1)
@@ -165,7 +168,7 @@ INITRD="$MNT/boot/initrd.img-$KVER"
 UINIT="$MNT/boot/uInitrd-$KVER"
 [ -f "$INITRD" ] || { echo "missing $INITRD"; ls -l "$MNT/boot"; exit 1; }
 if [ ! -f "$UINIT" ] || [ "$INITRD" -nt "$UINIT" ]; then
-	mkimage -A arm -O linux -T ramdisk -C none -n uInitrd -d "$INITRD" "$UINIT"
+	mkimage -A arm -O linux -T ramdisk -C gzip -n uInitrd -d "$INITRD" "$UINIT"
 fi
 ln -sfn "uInitrd-$KVER" "$MNT/boot/uInitrd"
 ls -l "$MNT/boot/uInitrd" "$UINIT" "$INITRD"
