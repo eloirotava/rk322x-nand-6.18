@@ -156,7 +156,16 @@ if grep -q '^user_overlays=' "$ENVF"; then
 else
 	printf '\nuser_overlays=nand-vendor\n' >> "$ENVF"
 fi
-grep user_overlays "$ENVF"
+# serial console, verbose kernel log: this image exists to debug over TTL
+for kv in verbosity=7 console=both; do
+	k=${kv%%=*}
+	if grep -q "^$k=" "$ENVF"; then
+		sed -i "s/^$k=.*/$kv/" "$ENVF"
+	else
+		echo "$kv" >> "$ENVF"
+	fi
+done
+cat "$ENVF"
 
 # rknand is NOT loaded on its own from the SD: on a NAND it does not
 # recognise, the vendor FTL may format it on the first load.  modprobe it

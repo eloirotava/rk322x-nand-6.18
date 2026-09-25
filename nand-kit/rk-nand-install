@@ -147,7 +147,7 @@ if [ "$DO" = 1 ]; then
 	    kernel /zImage
 	    initrd /initrd.img
 	    fdt /rk322x-box-nand.dtb
-	    append root=UUID=$UUID rootwait rootfstype=ext4 console=ttyS2,115200n8 console=tty1
+	    append root=UUID=$UUID rootwait rootfstype=ext4 console=ttyS2,115200n8 console=tty1 loglevel=7
 	EOF
 	echo "LABEL=rk-boot /boot/nand ext4 defaults,noatime 0 2" >> "$MNT/etc/fstab"
 	cat "$MNT/boot/nand/extlinux/extlinux.conf"
