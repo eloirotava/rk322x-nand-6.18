@@ -1,10 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Copyright (c) 2016, Fuzhou Rockchip Electronics Co., Ltd
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
  */
 
 #include <asm/cacheflush.h>
@@ -402,8 +398,8 @@ static int rknand_probe(struct platform_device *pdev)
 	g_nandc_info[id].clk = devm_clk_get(&pdev->dev, "clk_nandc");
 	g_nandc_info[id].gclk = devm_clk_get(&pdev->dev, "g_clk_nandc");
 
-	if (unlikely(IS_ERR(g_nandc_info[id].hclk))) {
-		dev_err(&pdev->dev, "rknand_probe get hclk error\n");
+	if (IS_ERR(g_nandc_info[id].hclk)) {
+		dev_err(&pdev->dev, "%s get hclk error\n", __func__);
 		return PTR_ERR(g_nandc_info[id].hclk);
 	}
 
@@ -412,8 +408,8 @@ static int rknand_probe(struct platform_device *pdev)
 		g_nandc_info[id].clk_rate = clk_get_rate(g_nandc_info[id].clk);
 		clk_prepare_enable(g_nandc_info[id].clk);
 		dev_info(&pdev->dev,
-			 "rknand_probe clk rate = %d\n",
-			 g_nandc_info[id].clk_rate);
+			 "%s clk rate = %d\n",
+			 __func__, g_nandc_info[id].clk_rate);
 	}
 
 	clk_prepare_enable(g_nandc_info[id].hclk);

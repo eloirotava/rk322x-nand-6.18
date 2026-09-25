@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * rknand_shims.c - 6.6 forward-port glue for the precompiled FTL blobs.
+ * Forward-port glue for the precompiled FTL blobs.
  *
  * The closed Rockchip FTL blobs (rk_zftl_arm32.S / rk_ftlv5_arm32.S) call kernel
  * routines by their pre-6.x symbol names. The C-preprocessor renames mainline
@@ -36,6 +36,12 @@ extern void usleep_range_state(unsigned long min, unsigned long max,
 
 /* Blob calls printk(); forward to the exported vprintk(). */
 #undef printk
+int printk(const char *fmt, ...);
+void usleep_range(unsigned long min, unsigned long max);
+void __aeabi_unwind_cpp_pr0(void);
+void __aeabi_unwind_cpp_pr1(void);
+void __aeabi_unwind_cpp_pr2(void);
+
 int printk(const char *fmt, ...)
 {
 	va_list args;

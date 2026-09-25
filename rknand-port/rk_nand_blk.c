@@ -1,10 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Copyright (c) 2016, Fuzhou Rockchip Electronics Co., Ltd
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
  */
 
 #define pr_fmt(fmt) "rk_nand: " fmt
@@ -55,6 +51,7 @@
  * pde_data(). Provide a real, module-local PDE_DATA symbol so the blob's call
  * resolves at link/load time. Do not make static (must be visible to the blob).
  */
+void *PDE_DATA(const struct inode *inode);
 void *PDE_DATA(const struct inode *inode)
 {
 	return pde_data(inode);
@@ -249,11 +246,11 @@ static blk_status_t do_blktrans_all_request(struct nand_blk_dev *dev,
 			char *p = buf;
 
 			rq_for_each_segment(bvec, req, rq_iter) {
-				page_buf = kmap_atomic(bvec.bv_page);
+				page_buf = kmap_local_page(bvec.bv_page);
 
 				memcpy(page_buf + bvec.bv_offset, p, bvec.bv_len);
 				p += bvec.bv_len;
-				kunmap_atomic(page_buf);
+				kunmap_local(page_buf);
 			}
 		}
 
@@ -269,10 +266,10 @@ static blk_status_t do_blktrans_all_request(struct nand_blk_dev *dev,
 			char *p = buf;
 
 			rq_for_each_segment(bvec, req, rq_iter) {
-				page_buf = kmap_atomic(bvec.bv_page);
+				page_buf = kmap_local_page(bvec.bv_page);
 				memcpy(p, page_buf + bvec.bv_offset, bvec.bv_len);
 				p += bvec.bv_len;
-				kunmap_atomic(page_buf);
+				kunmap_local(page_buf);
 			}
 		}
 
@@ -905,10 +902,8 @@ static void nand_blk_unregister(struct nand_blk_ops *nand_ops)
 		remove_proc_entry("rknand", NULL);
 		rknand_procfs_created = 0;
 	}
-	if (mtd_read_temp_buffer) {
-		kfree(mtd_read_temp_buffer);
-		mtd_read_temp_buffer = NULL;
-	}
+	kfree(mtd_read_temp_buffer);
+	mtd_read_temp_buffer = NULL;
 	unregister_blkdev(nand_ops->major, nand_ops->name);
 }
 

@@ -1,0 +1,168 @@
+#!/bin/bash
+# Install the running SD system onto the RK322x NAND, behind the vendor boot
+# chain (hataketsu/rk322x-s3plus-mainline, docs/nand-boot.md):
+#
+#   BootROM -> idblock -> miniloader -> trust + U-Boot 2017.09
+#     -> extlinux on rknand0p3 -> this kernel + rk322x-box-nand.dtb
+#     -> initrd with rknand.ko -> root on rknand0p4
+#
+# Without --yes it only prints what it would do.  Everything on the NAND is
+# lost.  Run from the SD card, with rknand loaded (modprobe rknand).
+set -euo pipefail
+
+KIT=/root/nand-kit
+DEV=/dev/rknand0
+MNT=/mnt/rk-nand
+DO=0
+
+case "${1:-}" in
+	--yes) DO=1 ;;
+	""|--dry-run) ;;
+	*) echo "usage: $0 [--dry-run|--yes]"; exit 2 ;;
+esac
+
+run() {
+	echo "+ $*"
+	[ "$DO" = 1 ] || return 0
+	"$@"
+}
+
+die() { echo "error: $*" >&2; exit 1; }
+
+KVER=$(uname -r)
+ROOTSRC=$(findmnt -no SOURCE /)
+case "$ROOTSRC" in
+	/dev/rknand*) die "running from the NAND ($ROOTSRC); boot from the SD card" ;;
+esac
+[ -b "$DEV" ] || die "$DEV missing: modprobe rknand, and check dmesg"
+for f in idblock.bin parameter.bin uboot.img trust.img; do
+	[ -f "$KIT/$f" ] || die "$KIT/$f missing"
+done
+DTB=$(ls /boot/dtb/rk322x-box-nand.dtb /boot/dtb-*/rk322x-box-nand.dtb 2>/dev/null | head -1)
+[ -n "$DTB" ] || die "rk322x-box-nand.dtb not found under /boot"
+KERNEL=/boot/vmlinuz-$KVER
+[ -f "$KERNEL" ] || KERNEL=/boot/zImage
+[ -f "$KERNEL" ] || die "no kernel image in /boot"
+for c in sfdisk mkfs.ext4 blkid mkinitramfs lsinitramfs tar; do
+	command -v "$c" >/dev/null || die "$c not installed"
+done
+
+SECTORS=$(blockdev --getsz "$DEV")
+echo "NAND $DEV: $((SECTORS / 2048)) MiB, kernel $KVER, root now on $ROOTSRC"
+[ "$DO" = 1 ] || echo "(dry run: nothing is written; pass --yes to install)"
+echo
+
+echo "== 1. partition table: RK parameter + MBR in sector 0 =="
+run dd if="$KIT/parameter.bin" of="$DEV" bs=512 seek=0 conv=notrunc,fsync status=none
+# The parameter takes bytes 0..300 and the MBR 446..511, so both fit.  --wipe
+# never keeps sfdisk from clearing the parameter.  Layout as mk-rkparam.py.
+if [ "$DO" = 1 ]; then
+	sfdisk --wipe never --no-reread "$DEV" <<-EOF
+	label: dos
+	start=0x2000, size=0x2000, type=da
+	start=0x4000, size=0x2000, type=da
+	start=0x6000, size=0x20000, type=83
+	start=0x26000, type=83
+	EOF
+	head -c 4 "$DEV" | grep -q PARM || die "parameter tag lost"
+	[ "$(dd if="$DEV" bs=1 skip=510 count=2 status=none | od -An -tx1 | tr -d ' ')" = 55aa ] ||
+		die "MBR signature missing"
+else
+	echo "+ sfdisk --wipe never: p1 uboot, p2 trust, p3 boot 64M, p4 rootfs"
+fi
+
+echo "== 2. U-Boot and trust =="
+run dd if="$KIT/uboot.img" of="$DEV" bs=512 seek=8192 conv=notrunc,fsync status=none
+run dd if="$KIT/trust.img" of="$DEV" bs=512 seek=16384 conv=notrunc,fsync status=none
+
+echo "== 3. idblock (the FTL moves it to its reserved blocks) =="
+# A write at LBA 64 starting with fcdc8c3b arms the FTL's loader capture; any
+# write at LBA >= 564 commits it through write_idblock.
+if [ "$DO" = 1 ]; then
+	dmesg -c >/dev/null 2>&1 || true
+fi
+run dd if="$KIT/idblock.bin" of="$DEV" bs=512 seek=64 oflag=direct conv=notrunc status=none
+run dd if=/dev/zero of="$DEV" bs=512 seek=564 count=1 oflag=direct conv=notrunc status=none
+if [ "$DO" = 1 ]; then
+	sync
+	sleep 2
+	dmesg | grep -q write_idblock || die "no write_idblock in dmesg: the loader was not taken"
+	echo "idblock committed"
+fi
+
+echo "== 4. filesystems =="
+run blockdev --rereadpt "$DEV"
+run sleep 2
+run mkfs.ext4 -q -F -L rk-boot "${DEV}p3"
+run mkfs.ext4 -q -F -L rk-root "${DEV}p4"
+
+echo "== 5. root filesystem =="
+run mkdir -p "$MNT"
+run mount "${DEV}p4" "$MNT"
+# one file system: /proc, /sys, /dev, /run and the mounts stay behind
+if [ "$DO" = 1 ]; then
+	tar -C / --one-file-system --xattrs --acls -cpf - . | tar -C "$MNT" --xattrs --acls -xpf -
+	mkdir -p "$MNT"/{dev,proc,sys,run,tmp,mnt,media}
+else
+	echo "+ tar -C / --one-file-system | tar -C $MNT"
+fi
+if [ "$DO" = 1 ]; then
+	UUID=$(blkid -s UUID -o value "${DEV}p4")
+	cat > "$MNT/etc/fstab" <<-EOF
+	UUID=$UUID / ext4 defaults,noatime,commit=120,errors=remount-ro 0 1
+	tmpfs /tmp tmpfs defaults,nosuid 0 0
+	EOF
+	# on the NAND the root needs rknand from the initrd
+	mkdir -p "$MNT/etc/initramfs-tools" "$MNT/etc/modules-load.d"
+	grep -qx rknand "$MNT/etc/initramfs-tools/modules" 2>/dev/null ||
+		echo rknand >> "$MNT/etc/initramfs-tools/modules"
+	echo rknand > "$MNT/etc/modules-load.d/rknand.conf"
+	# the boot files on p3 are laid out by hand; an apt kernel upgrade would
+	# not update them
+	chroot "$MNT" apt-mark hold linux-image-current-rockchip linux-dtb-current-rockchip \
+		>/dev/null 2>&1 || true
+else
+	echo "+ fstab on p4, rknand in its initramfs modules, kernel packages held"
+fi
+
+echo "== 6. boot partition: kernel, dtb, initrd with rknand, extlinux =="
+run mkdir -p "$MNT/boot/nand"
+run mount "${DEV}p3" "$MNT/boot/nand"
+run cp "$KERNEL" "$MNT/boot/nand/zImage"
+run cp "$DTB" "$MNT/boot/nand/rk322x-box-nand.dtb"
+IC=$(mktemp -d)
+run cp -a /etc/initramfs-tools/. "$IC/"
+if [ "$DO" = 1 ]; then
+	grep -qx rknand "$IC/modules" || echo rknand >> "$IC/modules"
+fi
+run mkinitramfs -d "$IC" -o "$MNT/boot/nand/initrd.img" "$KVER"
+if [ "$DO" = 1 ]; then
+	rm -rf "$IC"
+	lsinitramfs "$MNT/boot/nand/initrd.img" | grep -q 'rknand\.ko' || die "initrd without rknand.ko"
+	mkdir -p "$MNT/boot/nand/extlinux"
+	cat > "$MNT/boot/nand/extlinux/extlinux.conf" <<-EOF
+	timeout 10
+	default nand
+	label nand
+	    kernel /zImage
+	    initrd /initrd.img
+	    fdt /rk322x-box-nand.dtb
+	    append root=UUID=$UUID rootwait rootfstype=ext4 console=ttyS2,115200n8 console=tty1
+	EOF
+	echo "LABEL=rk-boot /boot/nand ext4 defaults,noatime 0 2" >> "$MNT/etc/fstab"
+	cat "$MNT/boot/nand/extlinux/extlinux.conf"
+else
+	echo "+ extlinux.conf: zImage, initrd.img, rk322x-box-nand.dtb, root=UUID of p4"
+fi
+
+echo "== 7. done =="
+run sync
+run umount "$MNT/boot/nand"
+run umount "$MNT"
+cat <<EOF
+
+Next: power off, take the SD card out, power on with the TTL attached
+(115200). U-Boot should print "Bootdev(atags): rknand 0" and load
+/extlinux/extlinux.conf from rknand 0:3. If it does not come up, use the
+jumper and the SD card to get back in.
+EOF

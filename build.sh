@@ -27,10 +27,14 @@ apt-get update
 apt-get install -y --no-install-recommends \
 	gcc-arm-linux-gnueabihf bc bison flex libssl-dev libelf-dev dwarves \
 	device-tree-compiler qemu-user-static binfmt-support kmod \
-	initramfs-tools ca-certificates curl xz-utils python3 u-boot-tools
+	initramfs-tools ca-certificates curl xz-utils python3 u-boot-tools \
+	git make gcc bzip2 patch binutils
 
 rm -rf "$WORKDIR"
 mkdir -p "$WORKDIR" "$OUT" "$MNT"
+
+echo "== NAND boot chain: U-Boot, trust, idblock, parameter =="
+WORK="$WORKDIR/uboot" bash "$ROOT/nand-kit/build-uboot.sh" "$WORKDIR/nand-kit"
 cd "$WORKDIR"
 
 echo "== download base image =="
@@ -154,13 +158,16 @@ else
 fi
 grep user_overlays "$ENVF"
 
-mkdir -p "$MNT/etc/modules-load.d" "$MNT/etc/initramfs-tools"
-printf 'rknand\n' > "$MNT/etc/modules-load.d/rknand.conf"
-touch "$MNT/etc/modules" "$MNT/etc/initramfs-tools/modules"
-grep -qx rknand "$MNT/etc/modules" || echo rknand >> "$MNT/etc/modules"
-grep -qx rknand "$MNT/etc/initramfs-tools/modules" || echo rknand >> "$MNT/etc/initramfs-tools/modules"
+# rknand is NOT loaded on its own from the SD: on a NAND it does not
+# recognise, the vendor FTL may format it on the first load.  modprobe it
+# by hand; rk-nand-install puts it in the NAND system's initrd.
+echo "== NAND kit =="
+install -d "$MNT/root/nand-kit"
+install -m 0644 "$WORKDIR"/nand-kit/* "$MNT/root/nand-kit/"
+install -m 0755 "$ROOT/nand-kit/rk-nand-install" "$MNT/usr/local/sbin/rk-nand-install"
+ls -l "$MNT/root/nand-kit"
 
-echo "== initrd =="
+echo "== depmod =="
 mount --bind /proc "$MNT/proc"
 mount --bind /sys "$MNT/sys"
 mount --bind /dev "$MNT/dev"
@@ -168,7 +175,7 @@ mkdir -p "$MNT/run"
 mount --bind /run "$MNT/run"
 cp /usr/bin/qemu-arm-static "$MNT/usr/bin/qemu-arm-static"
 chroot "$MNT" /usr/bin/qemu-arm-static /bin/bash -lc \
-	"/usr/sbin/depmod -a '$KVER' && /usr/sbin/update-initramfs -u -k '$KVER'"
+	"/usr/sbin/depmod -a '$KVER'"
 INITRD="$MNT/boot/initrd.img-$KVER"
 UINIT="$MNT/boot/uInitrd-$KVER"
 [ -f "$INITRD" ] || { echo "missing $INITRD"; ls -l "$MNT/boot"; exit 1; }
@@ -177,7 +184,6 @@ if [ ! -f "$UINIT" ] || [ "$INITRD" -nt "$UINIT" ]; then
 fi
 ln -sfn "uInitrd-$KVER" "$MNT/boot/uInitrd"
 ls -l "$MNT/boot/uInitrd" "$UINIT" "$INITRD"
-lsinitramfs "$INITRD" | grep -E 'rknand\.ko'
 umount "$MNT/run" "$MNT/dev" "$MNT/proc" "$MNT/sys"
 sync
 umount "$MNT"
@@ -189,18 +195,18 @@ rm -rf "$KSRC"
 NAME="Armbian_community_26.11.0-trunk.52_Rk322x-box_trixie_current_${KVER}_minimal-rknand.img.xz"
 xz -T0 -6 -c "$WORKDIR/base.img" > "$OUT/$NAME"
 sha256sum "$OUT/$NAME" | tee "$OUT/SHA256SUMS"
-TAG="v${KVER}-rknand"
+TAG="v${KVER}-rknand-kit"
 printf '%s\n' "$TAG" > "$OUT/tag.txt"
 cat > "$OUT/notes.txt" <<EOF
-Armbian Trixie minimal, kernel ${KVER}, com o rknand do hataketsu (rk322x-s3plus-mainline).
+Armbian Trixie minimal, kernel ${KVER}, com o rknand do hataketsu (rk322x-s3plus-mainline)
+e o kit para instalar na NAND.
 
-- rknand.ko no vermagic ${KVER}, em /lib/modules/${KVER}/extra e no initrd
-- overlay nand-vendor: compatible rockchip,rk-nandc, clocks clk_nandc/hclk_nandc, pinctrl lido do DTB desta imagem, mmc@30020000 desligado
-- user_overlays=nand-vendor e o modulo sobe sozinho
-
-Imagem de cartao SD. Nao grava a NAND e nao mexe no Debian que ja esta la.
-
-Com o miniloader de NAND no idblock, o BootROM ignora o SD. Para subir por este cartao, curto os pinos 29 e 30 na hora de ligar.
+- rknand.ko no vermagic ${KVER}, em /lib/modules/${KVER}/extra. Nao sobe sozinho: modprobe rknand
+- overlay nand-vendor ligado (compatible rockchip,rk-nandc, pinctrl lido do DTB desta imagem)
+- /root/nand-kit: uboot.img e trust.img (U-Boot 2017.09 da Rockchip com os patches do hataketsu),
+  idblock.bin, parameter.bin, e o loader de onde o idblock saiu
+- rk-nand-install: sem argumentos mostra o que faria; --yes grava a cadeia de boot e copia o
+  sistema do SD para a NAND (apaga tudo que esta nela)
 EOF
 echo "OUT $OUT/$NAME"
 ls -lh "$OUT"
